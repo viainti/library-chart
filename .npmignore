@@ -1,0 +1,10 @@
+example/
+docs/
+.env
+example/.env
+vite.config.js
+rollup.config.js
+tsconfig.json
+README.md
+.gitignore
+.npmignore
