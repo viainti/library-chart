@@ -320,23 +320,23 @@ interface ThemeTokens {
 
 const THEME_PRESETS: Record<Exclude<ThemePreset, 'custom'>, ThemeTokens> = {
   dark: {
-    pageBg: '#050910',
-    heroFrom: '#111827',
-    heroTo: '#0b1120',
-    panelBg: 'rgba(15,23,42,0.9)',
-    panelBorder: '#1f2937',
-    cardBg: 'rgba(15,23,42,0.85)',
-    cardBorder: '#111827',
+    pageBg: '#000000',
+    heroFrom: '#050505',
+    heroTo: '#000000',
+    panelBg: 'rgba(0,0,0,0.92)',
+    panelBorder: '#0f0f0f',
+    cardBg: 'rgba(0,0,0,0.88)',
+    cardBorder: '#050505',
     textPrimary: '#f8fafc',
-    textSecondary: '#94a3b8',
+    textSecondary: '#9ca3af',
     accent: '#2563eb',
-    accentSoft: 'rgba(37,99,235,0.2)',
-    railBg: 'rgba(2,6,23,0.85)',
-    railBorder: '#111827',
-    plotBg: '#020617',
-    plotBorder: '#111827',
-    scaleBg: 'rgba(15,23,42,0.9)',
-    overlayBg: 'rgba(5,7,15,0.85)'
+    accentSoft: 'rgba(37,99,235,0.25)',
+    railBg: 'rgba(0,0,0,0.9)',
+    railBorder: '#080808',
+    plotBg: '#010101',
+    plotBorder: '#0d0d0d',
+    scaleBg: 'rgba(0,0,0,0.92)',
+    overlayBg: 'rgba(0,0,0,0.85)'
   },
   blue: {
     pageBg: '#060e1f',
@@ -390,6 +390,10 @@ const CUSTOM_THEME_FIELDS: Array<{ key: keyof ThemeTokens; label: string }> = [
 const MIN_CANDLE_PX = 4;
 const MAX_CANDLE_PX = 28;
 const BUFFER_FRACTION = 0.18;
+const LEFT_OFFSET_BARS = 2;
+const RIGHT_OFFSET_BARS = 18;
+const BAR_BODY_RATIO = 0.78;
+const GRID_DIVISIONS = 10;
 const INERTIA_DURATION_MS = 900;
 const ZOOM_MIN = 0.2;
 const ZOOM_MAX = 6;
@@ -400,6 +404,23 @@ const easeInOutCubic = (t: number): number =>
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 const alignStroke = (value: number): number => Math.round(value) + 0.5;
+
+const getEffectiveBarCount = (count: number): number => Math.max(count + LEFT_OFFSET_BARS + RIGHT_OFFSET_BARS, 1);
+const getCandleStep = (width: number, count: number): number => (width <= 0 ? 0 : width / getEffectiveBarCount(count));
+const getCandleCenter = (index: number, width: number, count: number): number => {
+  const step = getCandleStep(width, count);
+  return (index + LEFT_OFFSET_BARS + 0.5) * step;
+};
+const clampPixelToChart = (pixel: number, width: number): number => Math.max(0, Math.min(width, pixel));
+const pixelToCandleIndex = (pixel: number, width: number, count: number): number => {
+  const step = getCandleStep(width, count);
+  if (step === 0) return 0;
+  return pixel / step - LEFT_OFFSET_BARS - 0.5;
+};
+const clampCandleIndex = (value: number, length: number): number => {
+  if (length <= 0) return 0;
+  return clamp(Math.round(value), 0, Math.max(length - 1, 0));
+};
 
 const createParallelPoints = (start: Point, end: Point, offset: number): Point[] => {
   const dx = end.x - start.x;
@@ -462,6 +483,8 @@ interface TradingViewChartProps {
   data: OHLCData[];
   symbol?: string;
   onTimeframeChange?: (timeframe: string) => void;
+  showStats?: boolean;
+  showHeaderStats?: boolean;
 }
 
 interface VisibleWindowMeta {
@@ -532,7 +555,7 @@ const computeVisibleWindow = (
   };
 };
 
-const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC/USDT', onTimeframeChange }) => {
+const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC/USDT', onTimeframeChange, showStats = true, showHeaderStats = true }) => {
   const chartRef = useRef<HTMLCanvasElement>(null);
   const volumeRef = useRef<HTMLCanvasElement>(null);
   const gridRef = useRef<HTMLCanvasElement>(null);
@@ -746,7 +769,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
   const applyPanDelta = useCallback((deltaPx: number) => {
     if (!chartWidth) return;
     const candles = getVisibleCandles();
-    const pxPerCandle = chartWidth / Math.max(candles.length || 1, 1);
+    const pxPerCandle = chartWidth / Math.max(getEffectiveBarCount(candles.length || 1), 1);
     if (!isFinite(pxPerCandle) || pxPerCandle === 0) return;
     const deltaOffset = deltaPx / Math.max(pxPerCandle, 1e-3);
     setPanOffsetSafe(panOffsetRef.current + deltaOffset);
@@ -895,6 +918,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
   const [priceLabels, setPriceLabels] = useState<string[]>([]);
   const [timeLabels, setTimeLabels] = useState<string[]>([]);
   const [clickedPrice, setClickedPrice] = useState<{ x: number; y: number; price: number } | null>(null);
+  const [crosshairMeta, setCrosshairMeta] = useState<{ price: number; timestamp: number | null; x: number; y: number } | null>(null);
   const [showConfigPanel, setShowConfigPanel] = useState(false);
   const [language, setLanguage] = useState<'en' | 'es'>('en');
   const [colorScheme, setColorScheme] = useState('green');
@@ -914,12 +938,13 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
   const iconBaseColor = '#f8fafc';
   const leftRailBaseBg = themePreset === 'light' ? '#0f172a' : activeTheme.panelBg;
   const strings = useMemo(() => UI_TEXT[language] ?? UI_TEXT.en, [language]);
+  const compactHeader = !showHeaderStats;
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [selectedCandleIndex, setSelectedCandleIndex] = useState<number | null>(null);
   const [seriesType, setSeriesType] = useState<SeriesType>('candles');
   const [showSeriesMenu, setShowSeriesMenu] = useState(false);
   const [isSeriesLoading, setIsSeriesLoading] = useState(false);
-  const [showQuickTips, setShowQuickTips] = useState(true);
+  const [showQuickTips, setShowQuickTips] = useState(showHeaderStats);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [pendingNotePoint, setPendingNotePoint] = useState<Point | null>(null);
@@ -1018,7 +1043,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
 
     const chartWidth = Math.max(1, cssWidth - priceScaleWidth);
     const chartHeight = Math.max(1, cssHeight - timeScaleHeight - volumeHeight);
-    const candleWidth = chartWidth / Math.max(candles.length, 1);
+    const candleStep = getCandleStep(chartWidth, candles.length);
+    const candleWidth = Math.max(1, candleStep * BAR_BODY_RATIO);
+    const halfStep = candleStep / 2;
+    const centerX = (index: number) => getCandleCenter(index, chartWidth, candles.length);
 
     // Generate price labels
     const priceLabelsArray: string[] = [];
@@ -1055,9 +1083,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
         gridCtx.lineTo(chartWidth, y);
         gridCtx.stroke();
       }
-      const timeStep = Math.max(1, Math.floor(candles.length / 10));
+      const timeStep = Math.max(1, Math.floor(Math.max(candles.length, 1) / GRID_DIVISIONS));
       for (let i = 0; i <= candles.length; i += timeStep) {
-        const x = alignStroke(i * candleWidth);
+        const x = alignStroke((i + LEFT_OFFSET_BARS) * candleStep);
+        if (x < 0 || x > chartWidth) continue;
         gridCtx.beginPath();
         gridCtx.moveTo(x, 0);
         gridCtx.lineTo(x, chartHeight);
@@ -1090,7 +1119,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
 
         chartCtx.beginPath();
         candles.forEach((candle, index) => {
-          const x = index * candleWidth + candleWidth / 2;
+          const x = centerX(index);
           const yClose = ((maxPrice - candle.close) / priceRange) * chartHeight;
 
           if (index === 0) {
@@ -1098,7 +1127,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
           } else if (seriesType === 'step') {
             const prev = candles[index - 1];
             if (prev) {
-              const prevX = (index - 1) * candleWidth + candleWidth / 2;
+              const prevX = centerX(index - 1);
               const prevY = ((maxPrice - prev.close) / priceRange) * chartHeight;
               chartCtx.lineTo(x, prevY);
               chartCtx.lineTo(x, yClose);
@@ -1114,26 +1143,26 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
         chartCtx.stroke();
 
         if (seriesType === 'line-markers') {
-          candles.forEach((candle, index) => {
-            const x = index * candleWidth + candleWidth / 2;
-            const yClose = ((maxPrice - candle.close) / priceRange) * chartHeight;
-            chartCtx.beginPath();
-            chartCtx.arc(x, yClose, 2.5, 0, 2 * Math.PI);
+           candles.forEach((candle, index) => {
+             const x = centerX(index);
+             const yClose = ((maxPrice - candle.close) / priceRange) * chartHeight;
+             chartCtx.beginPath();
+             chartCtx.arc(x, yClose, 2.5, 0, 2 * Math.PI);
             chartCtx.fillStyle = '#2962ff';
             chartCtx.fill();
           });
         }
 
-        if (seriesType === 'area' || seriesType === 'hlc-area' || seriesType === 'baseline') {
-          chartCtx.lineTo(
-            (candles.length - 1) * candleWidth + candleWidth / 2,
-            ((maxPrice - baselinePrice) / priceRange) * chartHeight
-          );
-          chartCtx.lineTo(
-            0 * candleWidth + candleWidth / 2,
-            ((maxPrice - baselinePrice) / priceRange) * chartHeight
-          );
-          chartCtx.closePath();
+         if (seriesType === 'area' || seriesType === 'hlc-area' || seriesType === 'baseline') {
+            chartCtx.lineTo(
+              centerX(candles.length - 1),
+             ((maxPrice - baselinePrice) / priceRange) * chartHeight
+           );
+            chartCtx.lineTo(
+              centerX(0),
+             ((maxPrice - baselinePrice) / priceRange) * chartHeight
+           );
+           chartCtx.closePath();
           chartCtx.fillStyle =
             seriesType === 'baseline' ? 'rgba(41,98,255,0.25)' : 'rgba(41,98,255,0.15)';
           chartCtx.fill();
@@ -1141,7 +1170,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
       } else {
         // ----- CANDLE / BAR-BASED SERIES -----
         candles.forEach((candle, index) => {
-          const xCenter = index * candleWidth + candleWidth / 2;
+          const xCenter = centerX(index);
           const strokeX = alignStroke(xCenter);
           const yHigh = ((maxPrice - candle.high) / priceRange) * chartHeight;
           const yLow = ((maxPrice - candle.low) / priceRange) * chartHeight;
@@ -1189,21 +1218,21 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
 
             if (bodyHeight > 1) {
               if (seriesType === 'hollow' && isBullish) {
-                chartCtx.strokeRect(
-                  xCenter - candleWidth * 0.4,
+                 chartCtx.strokeRect(
+                   xCenter - candleWidth * 0.4,
                   bodyY,
                   candleWidth * 0.8,
                   bodyHeight
                 );
               } else {
-                chartCtx.fillRect(
-                  xCenter - candleWidth * 0.4,
+                 chartCtx.fillRect(
+                   xCenter - candleWidth * 0.4,
                   bodyY,
                   candleWidth * 0.8,
                   bodyHeight
                 );
-                chartCtx.strokeRect(
-                  xCenter - candleWidth * 0.4,
+                 chartCtx.strokeRect(
+                   xCenter - candleWidth * 0.4,
                   bodyY,
                   candleWidth * 0.8,
                   bodyHeight
@@ -1212,8 +1241,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
             } else {
               chartCtx.beginPath();
               const bodyYStroke = alignStroke(yOpen);
-              chartCtx.moveTo(xCenter - candleWidth * 0.4, bodyYStroke);
-              chartCtx.lineTo(xCenter + candleWidth * 0.4, bodyYStroke);
+               chartCtx.moveTo(xCenter - candleWidth * 0.4, bodyYStroke);
+               chartCtx.lineTo(xCenter + candleWidth * 0.4, bodyYStroke);
               chartCtx.stroke();
             }
           } else if (seriesType === 'bars') {
@@ -1223,17 +1252,17 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
             // wick already drawn; add open/close ticks
             chartCtx.beginPath();
             // open tick (left)
-            chartCtx.moveTo(xCenter - candleWidth * 0.4, alignedYOpen);
+             chartCtx.moveTo(xCenter - candleWidth * 0.4, alignedYOpen);
             chartCtx.lineTo(xCenter, alignedYOpen);
             // close tick (right)
-            chartCtx.moveTo(xCenter, alignedYClose);
-            chartCtx.lineTo(xCenter + candleWidth * 0.4, alignedYClose);
+             chartCtx.moveTo(xCenter, alignedYClose);
+             chartCtx.lineTo(xCenter + candleWidth * 0.4, alignedYClose);
             chartCtx.stroke();
           } else if (seriesType === 'columns') {
             // Column style (vertical bar from low to high)
             chartCtx.fillStyle = color;
-            chartCtx.fillRect(
-              xCenter - candleWidth * 0.3,
+             chartCtx.fillRect(
+               xCenter - candleWidth * 0.3,
               yLow,
               candleWidth * 0.6,
               yHigh - yLow
@@ -1249,15 +1278,15 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
     // Draw volume
     const volumeCtx = volumeRef.current?.getContext('2d');
     if (volumeCtx) {
-      volumeCtx.clearRect(0, 0, chartWidth, volumeHeight);
-      candles.forEach((candle, index) => {
-        const x = index * candleWidth;
-        const barHeight = ((candle.volume || 0) / maxVolume) * volumeHeight;
-        const y = volumeHeight - barHeight;
-        const isBullish = candle.close > candle.open;
-        volumeCtx.fillStyle = isBullish ? bullishColor : bearishColor;
-        volumeCtx.fillRect(x + 1, y, candleWidth - 2, barHeight);
-      });
+       volumeCtx.clearRect(0, 0, chartWidth, volumeHeight);
+        candles.forEach((candle, index) => {
+          const xLeft = centerX(index) - candleWidth / 2;
+         const barHeight = ((candle.volume || 0) / maxVolume) * volumeHeight;
+         const y = volumeHeight - barHeight;
+         const isBullish = candle.close > candle.open;
+         volumeCtx.fillStyle = isBullish ? bullishColor : bearishColor;
+         volumeCtx.fillRect(xLeft + 1, y, Math.max(1, candleWidth - 2), barHeight);
+       });
     }
 
     // Draw indicators
@@ -1270,28 +1299,28 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
           indicatorCtx.setLineDash(indicator.style === 'dashed' ? [5, 5] : indicator.style === 'dotted' ? [2, 2] : []);
           indicatorCtx.beginPath();
 
-          indicator.data.forEach((value, index) => {
-            if (value !== null && value !== undefined) {
-              const x = index * candleWidth + candleWidth / 2;
-              const y = ((maxPrice - value) / priceRange) * chartHeight;
-              if (index === 0) {
-                indicatorCtx.moveTo(x, y);
-              } else {
-                indicatorCtx.lineTo(x, y);
+           indicator.data.forEach((value, index) => {
+             if (value !== null && value !== undefined) {
+                const x = centerX(index);
+               const y = ((maxPrice - value) / priceRange) * chartHeight;
+               if (index === 0) {
+                 indicatorCtx.moveTo(x, y);
+               } else {
+                 indicatorCtx.lineTo(x, y);
               }
             }
           });
           indicatorCtx.stroke();
         } else if (indicator.type === 'histogram') {
-          indicator.data.forEach((value, index) => {
-            if (value !== null && value !== undefined) {
-              const x = index * candleWidth;
-              const barHeight = Math.abs(value) * chartHeight * 0.1; // Scale histogram
-              const y = value >= 0 ? chartHeight / 2 - barHeight : chartHeight / 2;
-              indicatorCtx.fillStyle = value >= 0 ? '#089981' : '#f23645';
-              indicatorCtx.fillRect(x + 2, y, candleWidth - 4, barHeight);
-            }
-          });
+           indicator.data.forEach((value, index) => {
+             if (value !== null && value !== undefined) {
+                const xLeft = centerX(index) - candleWidth / 2;
+               const barHeight = Math.abs(value) * chartHeight * 0.1; // Scale histogram
+               const y = value >= 0 ? chartHeight / 2 - barHeight : chartHeight / 2;
+               indicatorCtx.fillStyle = value >= 0 ? '#089981' : '#f23645';
+               indicatorCtx.fillRect(xLeft + 2, y, Math.max(1, candleWidth - 4), barHeight);
+             }
+           });
         }
       });
       indicatorCtx.setLineDash([]); // Reset line dash
@@ -1321,35 +1350,50 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
   }, [chartWidth, chartHeight, overlayHeight]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (interactionsLocked || !visibleData.length) return;
+    if (interactionsLocked || !visibleData.length) {
+      setCrosshairMeta(null);
+      return;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     setClickedPrice(null);
 
     if (cursorType !== 'cross') {
+      setCrosshairMeta(null);
       return;
     }
 
     if (!isDraggingRef.current) {
       const { min, max } = priceWindowRef.current;
-      const snappedX = coordsRef.current.snapToCandle(x, chartWidth, visibleData.length);
-      const snappedY = coordsRef.current.snapToPrice(y, chartHeight, min, max);
+      const rawIndex = pixelToCandleIndex(x, chartWidth, visibleData.length);
+      const hoveredIndex = clampCandleIndex(rawIndex, visibleData.length);
+      const hoveredCandle = visibleData[hoveredIndex];
+      const snappedPrice = coordsRef.current.snapToPrice(y, chartHeight, min, max);
+      const yPixel = coordsRef.current.priceToPixel(snappedPrice, chartHeight, min, max);
+      const xPixel = magnetEnabled
+        ? getCandleCenter(hoveredIndex, chartWidth, visibleData.length)
+        : clampPixelToChart(x, chartWidth);
 
-      mousePosRef.current = {
-        x: coordsRef.current.timeToPixel(snappedX, chartWidth, visibleData.length),
-        y: coordsRef.current.priceToPixel(snappedY, chartHeight, min, max)
-      };
+      mousePosRef.current = { x: xPixel, y: yPixel };
+      setCrosshairMeta({
+        price: snappedPrice,
+        timestamp: hoveredCandle?.timestamp ?? null,
+        x: xPixel,
+        y: yPixel,
+        candle: hoveredCandle ?? null
+      });
       showCrosshairRef.current = true;
       requestAnimationFrame(drawCrosshair);
     }
-  }, [visibleData, cursorType, chartWidth, chartHeight, drawCrosshair, interactionsLocked]);
+  }, [visibleData, cursorType, chartWidth, chartHeight, drawCrosshair, interactionsLocked, magnetEnabled]);
 
   const handleMouseLeave = useCallback(() => {
     showCrosshairRef.current = false;
     isDraggingRef.current = false;
     dragSampleRef.current.velocity = 0;
     dragSampleRef.current.lastTs = 0;
+    setCrosshairMeta(null);
     requestAnimationFrame(() => {
       const overlayCtx = overlayRef.current?.getContext('2d');
       if (overlayCtx) {
@@ -1803,6 +1847,129 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
     { value: 'high-low', label: 'High/Low', icon: seriesIconMap['high-low'] }
   ];
 
+  const headerButtons = (
+    <>
+      <button
+        onClick={() => setShowSeriesMenu(!showSeriesMenu)}
+        style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '999px',
+          border: `1px solid ${showSeriesMenu ? activeTheme.accent : iconBaseBg}`,
+          background: showSeriesMenu ? activeTheme.accent : iconBaseBg,
+          color: iconBaseColor,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          transition: 'all 0.2s'
+        }}
+        title={strings.buttons.series}
+        aria-label={strings.buttons.series}
+      >
+        {seriesIconMap[seriesType] ?? <BsGraphUp />}
+      </button>
+      <button
+        onClick={toggleIndicatorsPanel}
+        style={{
+          background: showIndicatorsPanel ? '#2563eb' : 'rgba(15,23,42,0.6)',
+          color: '#e2e8f0',
+          border: '1px solid #1f2937',
+          borderRadius: '999px',
+          padding: '8px 14px',
+          fontSize: '12px',
+          fontWeight: 600,
+          cursor: 'pointer',
+          transition: 'all 0.2s'
+        }}
+      >
+        {strings.buttons.indicators}
+      </button>
+      <button
+        onClick={() => setShowConfigPanel(!showConfigPanel)}
+        style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '999px',
+          border: `1px solid ${showConfigPanel ? activeTheme.accent : iconBaseBg}`,
+          background: showConfigPanel ? activeTheme.accent : iconBaseBg,
+          color: iconBaseColor,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          transition: 'all 0.2s'
+        }}
+        title={strings.buttons.config}
+        aria-label={strings.buttons.config}
+      >
+        <BsGear />
+      </button>
+      <button
+        onClick={() => setIsFullscreen(prev => !prev)}
+        style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '999px',
+          border: `1px solid ${isFullscreen ? activeTheme.accent : iconBaseBg}`,
+          background: isFullscreen ? activeTheme.accent : iconBaseBg,
+          color: iconBaseColor,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          transition: 'all 0.2s'
+        }}
+        title={isFullscreen ? strings.buttons.fullscreenExit : strings.buttons.fullscreenEnter}
+        aria-label={isFullscreen ? strings.buttons.fullscreenExit : strings.buttons.fullscreenEnter}
+      >
+        <BsArrowsFullscreen />
+      </button>
+      <button
+        onClick={takeScreenshot}
+        style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '999px',
+          border: `1px solid ${iconBaseBg}`,
+          background: iconBaseBg,
+          color: iconBaseColor,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          transition: 'all 0.2s'
+        }}
+        title={strings.buttons.screenshot}
+        aria-label={strings.buttons.screenshot}
+      >
+        <BsCamera />
+      </button>
+      {showHeaderStats && (
+        <button
+          onClick={() => setShowQuickTips(prev => !prev)}
+          style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: '999px',
+            border: `1px solid ${showQuickTips ? activeTheme.accent : iconBaseBg}`,
+            background: showQuickTips ? activeTheme.accent : iconBaseBg,
+            color: iconBaseColor,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.2s'
+          }}
+          title={strings.buttons.help}
+          aria-label={strings.buttons.help}
+        >
+          <BsQuestionCircle />
+        </button>
+      )}
+    </>
+  );
+
   const cursorCss =
     isDraggingRef.current
       ? 'grabbing'
@@ -1838,9 +2005,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
           background: `linear-gradient(120deg, ${activeTheme.heroFrom} 0%, ${activeTheme.heroTo} 100%)`,
           borderBottom: `1px solid ${activeTheme.panelBorder}`,
           display: 'flex',
-          flexWrap: 'wrap',
+          flexDirection: 'column',
           gap: isMobile ? '12px' : '16px',
-          alignItems: 'center',
           padding: isMobile ? '12px 16px' : '16px 20px',
           boxShadow: elevatedShadow
         }}
@@ -1848,257 +2014,210 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
       >
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', minWidth: 0 }}>
-          <div style={{ background: activeTheme.cardBg, border: `1px solid ${activeTheme.cardBorder}`, borderRadius: '14px', padding: '10px 16px', minWidth: '160px', color: activeTheme.textPrimary }}>
-            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: activeTheme.textSecondary, marginBottom: '4px' }}>{strings.symbolLabel}</div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: activeTheme.textPrimary, fontWeight: 600, gap: '10px' }}>
-              <span style={{ fontSize: '15px' }}>{symbol}</span>
-              <span style={{ fontSize: '12px', background: activeTheme.accent, color: '#fff', padding: '2px 10px', borderRadius: '999px' }}>{timeframe}</span>
+        {showHeaderStats && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', minWidth: 0 }}>
+            <div style={{ background: activeTheme.cardBg, border: `1px solid ${activeTheme.cardBorder}`, borderRadius: '14px', padding: '10px 16px', minWidth: '160px', color: activeTheme.textPrimary }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: activeTheme.textSecondary, marginBottom: '4px' }}>{strings.symbolLabel}</div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: activeTheme.textPrimary, fontWeight: 600, gap: '10px' }}>
+                <span style={{ fontSize: '15px' }}>{symbol}</span>
+                <span style={{ fontSize: '12px', background: activeTheme.accent, color: '#fff', padding: '2px 10px', borderRadius: '999px' }}>{timeframe}</span>
+              </div>
             </div>
+            <motion.div
+              key={currentPrice}
+              style={{ background: activeTheme.cardBg, border: `1px solid ${priceChange >= 0 ? '#16a34a' : '#f43f5e'}`, borderRadius: '14px', padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '16px', minWidth: '210px', color: activeTheme.textPrimary }}
+              initial={{ scale: 1.05, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div style={{ fontSize: '20px', fontWeight: 700, color: activeTheme.textPrimary }}>{numberFormatter.format(currentPrice)}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', color: activeTheme.textSecondary }}>{strings.priceChangeLabel}</span>
+                <motion.span
+                  key={priceChange}
+                  style={{
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: priceChange >= 0 ? '#16a34a' : '#f43f5e',
+                    background: themePreset === 'light' ? 'rgba(15,23,42,0.08)' : 'rgba(15,23,42,0.5)',
+                    padding: '4px 10px',
+                    borderRadius: '999px'
+                  }}
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {priceChange >= 0 ? '+' : ''}{numberFormatter.format(priceChange)} ({priceChangePercent >= 0 ? '+' : ''}{shortNumberFormatter.format(priceChangePercent)}%)
+                </motion.span>
+              </div>
+            </motion.div>
+            {referenceCandle && (
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', background: 'rgba(15,23,42,0.6)', borderRadius: '12px', padding: '10px 14px', border: '1px solid #1f2937', color: '#94a3b8', fontSize: '12px' }}>
+                {[
+                  { label: 'O', value: referenceCandle.open },
+                  { label: 'H', value: referenceCandle.high },
+                  { label: 'L', value: referenceCandle.low },
+                  { label: 'C', value: referenceCandle.close },
+                  { label: 'V', value: referenceCandle.volume ?? 0 }
+                ].map(item => (
+                  <div key={item.label} style={{ display: 'flex', flexDirection: 'column', minWidth: '50px' }}>
+                    <span style={{ fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{item.label}</span>
+                    <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{item.value.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <motion.div
-            key={currentPrice}
-            style={{ background: activeTheme.cardBg, border: `1px solid ${priceChange >= 0 ? '#16a34a' : '#f43f5e'}`, borderRadius: '14px', padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '16px', minWidth: '210px', color: activeTheme.textPrimary }}
-            initial={{ scale: 1.05, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.2 }}
+        )}
+        {compactHeader ? (
+          <div
+            style={{
+              width: '100%',
+              display: 'flex',
+              flexWrap: isMobile ? 'wrap' : 'nowrap',
+              alignItems: 'center',
+              gap: isMobile ? '12px' : '16px'
+            }}
           >
-            <div style={{ fontSize: '20px', fontWeight: 700, color: activeTheme.textPrimary }}>{numberFormatter.format(currentPrice)}</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', color: activeTheme.textSecondary }}>{strings.priceChangeLabel}</span>
-              <motion.span
-                key={priceChange}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                padding: '8px 14px',
+                background: activeTheme.panelBg,
+                borderRadius: '16px',
+                border: `1px solid ${activeTheme.panelBorder}`,
+                flex: 1,
+                minWidth: isMobile ? '100%' : '320px'
+              }}
+            >
+              <span style={{ fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>{strings.timeframeTitle}</span>
+              <select
+                value={timeframe}
+                onChange={(e) => handleTimeframeChange(e.target.value)}
                 style={{
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: priceChange >= 0 ? '#16a34a' : '#f43f5e',
-                  background: themePreset === 'light' ? 'rgba(15,23,42,0.08)' : 'rgba(15,23,42,0.5)',
-                  padding: '4px 10px',
-                  borderRadius: '999px'
-                }}
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                {priceChange >= 0 ? '+' : ''}{numberFormatter.format(priceChange)} ({priceChangePercent >= 0 ? '+' : ''}{shortNumberFormatter.format(priceChangePercent)}%)
-              </motion.span>
-            </div>
-          </motion.div>
-          {referenceCandle && (
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', background: 'rgba(15,23,42,0.6)', borderRadius: '12px', padding: '10px 14px', border: '1px solid #1f2937', color: '#94a3b8', fontSize: '12px' }}>
-              {[
-                { label: 'O', value: referenceCandle.open },
-                { label: 'H', value: referenceCandle.high },
-                { label: 'L', value: referenceCandle.low },
-                { label: 'C', value: referenceCandle.close },
-                { label: 'V', value: referenceCandle.volume ?? 0 }
-              ].map(item => (
-                <div key={item.label} style={{ display: 'flex', flexDirection: 'column', minWidth: '50px' }}>
-                  <span style={{ fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{item.label}</span>
-                  <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{item.value.toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            padding: '10px 14px',
-            background: activeTheme.panelBg,
-            borderRadius: '16px',
-            border: `1px solid ${activeTheme.panelBorder}`,
-            overflowX: 'auto'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
-            <span style={{ fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>{strings.timeframeTitle}</span>
-            <span style={{ fontSize: '11px', color: '#f8fafc', fontWeight: 600, padding: '2px 8px', borderRadius: '999px', background: 'rgba(37,99,235,0.25)', border: '1px solid rgba(37,99,235,0.6)' }}>{timeframe}</span>
-          </div>
-          <div style={{ display: 'flex', gap: '6px', flex: 1, minWidth: 0, overflowX: 'auto', paddingBottom: '4px' }}>
-            {['1m', '3m', '5m', '15m', '30m', '1h', '4h'].map(tf => (
-              <button
-                key={tf}
-                onClick={() => handleTimeframeChange(tf)}
-                style={{
-                  background: timeframe === tf ? activeTheme.accent : activeTheme.panelBg,
-                  color: timeframe === tf ? '#f8fafc' : activeTheme.textSecondary,
-                  border: `1px solid ${timeframe === tf ? activeTheme.accent : activeTheme.panelBorder}`,
-                  borderRadius: '10px',
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  fontWeight: 600,
+                  background: 'rgba(15,23,42,0.8)',
+                  color: '#e2e8f0',
+                  border: '1px solid #1f2937',
+                  padding: '8px 32px 8px 12px',
+                  borderRadius: '12px',
                   cursor: 'pointer',
-                  transition: 'all 0.2s',
-                  flex: '0 0 auto',
-                  whiteSpace: 'nowrap'
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  appearance: 'none',
+                  backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e")`,
+                  backgroundPosition: 'right 10px center',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundSize: '14px',
+                  minWidth: '140px'
                 }}
               >
-                {tf}
-              </button>
-            ))}
+                <option value="1m">1m</option>
+                <option value="3m">3m</option>
+                <option value="5m">5m</option>
+                <option value="15m">15m</option>
+                <option value="30m">30m</option>
+                <option value="1h">1h</option>
+                <option value="4h">4h</option>
+                <option value="12h">12h</option>
+                <option value="1D">1D</option>
+                <option value="3D">3D</option>
+                <option value="1W">1W</option>
+                <option value="1M">1M</option>
+              </select>
+            </div>
+            <div style={{ marginLeft: isMobile ? 0 : 'auto', display: 'flex', flexWrap: isMobile ? 'wrap' : 'nowrap', gap: '8px', alignItems: 'center' }}>
+              {headerButtons}
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#cbd5f5', whiteSpace: 'nowrap', flexShrink: 0 }}>
-            <BsClockHistory />
-            <span>{strings.axis.time}: {currentTimeLabel}</span>
-          </div>
-          <select
-            value={timeframe}
-            onChange={(e) => handleTimeframeChange(e.target.value)}
-            style={{
-              background: 'rgba(15,23,42,0.8)',
-              color: '#e2e8f0',
-              border: '1px solid #1f2937',
-              padding: '10px 36px 10px 12px',
-              borderRadius: '12px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: 600,
-              appearance: 'none',
-              backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e")`,
-              backgroundPosition: 'right 10px center',
-              backgroundRepeat: 'no-repeat',
-              backgroundSize: '14px',
-              minWidth: '120px',
-              flexShrink: 0
-            }}
-          >
-            <option value="1m">1m</option>
-            <option value="3m">3m</option>
-            <option value="5m">5m</option>
-            <option value="15m">15m</option>
-            <option value="30m">30m</option>
-            <option value="1h">1h</option>
-            <option value="4h">4h</option>
-            <option value="12h">12h</option>
-            <option value="1D">1D</option>
-            <option value="3D">3D</option>
-            <option value="1W">1W</option>
-            <option value="1M">1M</option>
-          </select>
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
-          <button
-            onClick={() => setShowSeriesMenu(!showSeriesMenu)}
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '999px',
-              border: `1px solid ${showSeriesMenu ? activeTheme.accent : iconBaseBg}`,
-              background: showSeriesMenu ? activeTheme.accent : iconBaseBg,
-              color: iconBaseColor,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-            title={strings.buttons.series}
-            aria-label={strings.buttons.series}
-          >
-            {seriesIconMap[seriesType] ?? <BsGraphUp />}
-          </button>
-          <button
-            onClick={toggleIndicatorsPanel}
-            style={{
-              background: showIndicatorsPanel ? '#2563eb' : 'rgba(15,23,42,0.6)',
-              color: '#e2e8f0',
-              border: '1px solid #1f2937',
-              borderRadius: '999px',
-              padding: '8px 14px',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-          >
-            {strings.buttons.indicators}
-          </button>
-          <button
-            onClick={() => setShowConfigPanel(!showConfigPanel)}
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '999px',
-              border: `1px solid ${showConfigPanel ? activeTheme.accent : iconBaseBg}`,
-              background: showConfigPanel ? activeTheme.accent : iconBaseBg,
-              color: iconBaseColor,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-            title={strings.buttons.config}
-            aria-label={strings.buttons.config}
-          >
-            <BsGear />
-          </button>
-          <button
-            onClick={() => setIsFullscreen(prev => !prev)}
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '999px',
-              border: `1px solid ${isFullscreen ? activeTheme.accent : iconBaseBg}`,
-              background: isFullscreen ? activeTheme.accent : iconBaseBg,
-              color: iconBaseColor,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-            title={isFullscreen ? strings.buttons.fullscreenExit : strings.buttons.fullscreenEnter}
-            aria-label={isFullscreen ? strings.buttons.fullscreenExit : strings.buttons.fullscreenEnter}
-          >
-            <BsArrowsFullscreen />
-          </button>
-          <button
-            onClick={takeScreenshot}
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '999px',
-              border: `1px solid ${iconBaseBg}`,
-              background: iconBaseBg,
-              color: iconBaseColor,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-            title={strings.buttons.screenshot}
-            aria-label={strings.buttons.screenshot}
-          >
-            <BsCamera />
-          </button>
-          <button
-            onClick={() => setShowQuickTips(prev => !prev)}
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '999px',
-              border: `1px solid ${showQuickTips ? activeTheme.accent : iconBaseBg}`,
-              background: showQuickTips ? activeTheme.accent : iconBaseBg,
-              color: iconBaseColor,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-            title={strings.buttons.help}
-            aria-label={strings.buttons.help}
-          >
-            <BsQuestionCircle />
-          </button>
-        </div>
+        ) : (
+          <>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '10px 14px',
+                background: activeTheme.panelBg,
+                borderRadius: '16px',
+                border: `1px solid ${activeTheme.panelBorder}`,
+                overflowX: 'auto'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>{strings.timeframeTitle}</span>
+                <span style={{ fontSize: '11px', color: '#f8fafc', fontWeight: 600, padding: '2px 8px', borderRadius: '999px', background: 'rgba(37,99,235,0.25)', border: '1px solid rgba(37,99,235,0.6)' }}>{timeframe}</span>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flex: 1, minWidth: 0, overflowX: 'auto', paddingBottom: '4px' }}>
+                {['1m', '3m', '5m', '15m', '30m', '1h', '4h'].map(tf => (
+                  <button
+                    key={tf}
+                    onClick={() => handleTimeframeChange(tf)}
+                    style={{
+                      background: timeframe === tf ? activeTheme.accent : activeTheme.panelBg,
+                      color: timeframe === tf ? '#f8fafc' : activeTheme.textSecondary,
+                      border: `1px solid ${timeframe === tf ? activeTheme.accent : activeTheme.panelBorder}`,
+                      borderRadius: '10px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      flex: '0 0 auto',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {tf}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#cbd5f5', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                <BsClockHistory />
+                <span>{strings.axis.time}: {currentTimeLabel}</span>
+              </div>
+              <select
+                value={timeframe}
+                onChange={(e) => handleTimeframeChange(e.target.value)}
+                style={{
+                  background: 'rgba(15,23,42,0.8)',
+                  color: '#e2e8f0',
+                  border: '1px solid #1f2937',
+                  padding: '10px 36px 10px 12px',
+                  borderRadius: '12px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  appearance: 'none',
+                  backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e")`,
+                  backgroundPosition: 'right 10px center',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundSize: '14px',
+                  minWidth: '120px',
+                  flexShrink: 0
+                }}
+              >
+                <option value="1m">1m</option>
+                <option value="3m">3m</option>
+                <option value="5m">5m</option>
+                <option value="15m">15m</option>
+                <option value="30m">30m</option>
+                <option value="1h">1h</option>
+                <option value="4h">4h</option>
+                <option value="12h">12h</option>
+                <option value="1D">1D</option>
+                <option value="3D">3D</option>
+                <option value="1W">1W</option>
+                <option value="1M">1M</option>
+              </select>
+            </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+              {headerButtons}
+            </div>
+          </>
+        )}
       </motion.div>
-      {derivedStats && (
+      {showStats && derivedStats && (
         <div style={{ padding: '16px 20px 0', background: activeTheme.panelBg, borderBottom: `1px solid ${activeTheme.panelBorder}` }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
             <div style={{ ...metricCardStyle, background: activeTheme.cardBg, border: `1px solid ${activeTheme.cardBorder}` }}>
@@ -2125,7 +2244,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
         </div>
       )}
       <AnimatePresence>
-        {showQuickTips && (
+        {showHeaderStats && showQuickTips && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -2361,6 +2480,50 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
               ))}
             </div>
           </div>
+          {crosshairMeta && (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  right: `${priceScaleWidth}px`,
+                  top: `${Math.min(Math.max(crosshairMeta.y, 12), overlayHeight - 12)}px`,
+                  transform: 'translate(0, -50%)',
+                  background: activeTheme.scaleBg,
+                  border: `1px solid ${activeTheme.panelBorder}`,
+                  borderRadius: '6px 0 0 6px',
+                  padding: '2px 8px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: activeTheme.textPrimary,
+                  pointerEvents: 'none',
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.4)'
+                }}
+              >
+                {numberFormatter.format(crosshairMeta.price)}
+              </div>
+              {crosshairMeta.timestamp && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${Math.min(Math.max(crosshairMeta.x, 40), chartWidth - 40)}px`,
+                    bottom: `${timeScaleHeight}px`,
+                    transform: 'translate(-50%, 50%)',
+                    background: activeTheme.scaleBg,
+                    border: `1px solid ${activeTheme.panelBorder}`,
+                    borderRadius: '6px',
+                    padding: '2px 8px',
+                    fontSize: '10px',
+                    letterSpacing: '0.05em',
+                    color: activeTheme.textPrimary,
+                    pointerEvents: 'none',
+                    boxShadow: '0 8px 20px rgba(0,0,0,0.35)'
+                  }}
+                >
+                  {timeFormatter.format(new Date(crosshairMeta.timestamp))}
+                </div>
+              )}
+            </>
+          )}
           {clickedPrice && (
             <div style={{
               position: 'absolute',
@@ -2631,12 +2794,14 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({ data, symbol = 'BTC
           <div style={{ fontSize: '12px', color: activeTheme.textSecondary }}>{strings.config.soon}</div>
         </div>
       )}
-      <div style={{ padding: isMobile ? '8px 16px' : '10px 20px', background: activeTheme.panelBg, borderTop: `1px solid ${activeTheme.panelBorder}`, display: 'flex', flexWrap: 'wrap', gap: isMobile ? '12px' : '18px', fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: activeTheme.textSecondary }}>
-        <span>Latency {latencyMs}ms</span>
-        <span>Session {derivedStats?.session ?? 'Global'}</span>
-        <span>Feed Binance Composite</span>
-        <span>Security AES-256</span>
-      </div>
+      {showHeaderStats && (
+        <div style={{ padding: isMobile ? '8px 16px' : '10px 20px', background: activeTheme.panelBg, borderTop: `1px solid ${activeTheme.panelBorder}`, display: 'flex', flexWrap: 'wrap', gap: isMobile ? '12px' : '18px', fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: activeTheme.textSecondary }}>
+          <span>Latency {latencyMs}ms</span>
+          <span>Session {derivedStats?.session ?? 'Global'}</span>
+          <span>Feed Binance Composite</span>
+          <span>Security AES-256</span>
+        </div>
+      )}
     </div>
   );
 };

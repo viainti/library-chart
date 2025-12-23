@@ -19,6 +19,11 @@
 4. Captura y fullscreen con feedback mediante toasts ligeros.
 5. Ajuste de zoom/pan suavizado y límites protegidos.
 
+## Modo compacto (embed simple)
+- Exponer flags `showStats` y `showHeaderStats` en `<TradingViewChart />` para ocultar métricas, ribbon y footer.
+- Documentar en el README que el modo simple se visualiza mediante `npm run dev` → `?mode=simple` y que mantiene sólo toolbar + dropdown.
+- Evitar overlays (Quick tips, footer Feed Binance) cuando `showHeaderStats` sea `false` para no saturar la experiencia white-label.
+
 ## Implementación técnica
 - `src/TradingViewChart.tsx`: reorganizar layout, estados de overlays, lógica de dibujo y tooltips.
 - `src/DrawingToolbar.tsx`: anotar tooltips, popovers y estados activos para cada icono.

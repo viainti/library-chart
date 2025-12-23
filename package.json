@@ -1,6 +1,6 @@
 {
   "name": "viainti-chart",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "Advanced React OHLC chart library with TradingView-style interface, indicators, drawings, and full mobile responsiveness. Perfect for fintech dashboards and trading apps.",
   "type": "module",
   "main": "dist/index.cjs",

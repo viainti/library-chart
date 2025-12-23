@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BsCursor,
   BsSlash,
@@ -9,6 +9,12 @@ import {
   BsChevronBarExpand,
   BsType,
   BsEmojiSmile,
+  BsEmojiLaughing,
+  BsEmojiSunglasses,
+  BsEmojiHeartEyes,
+  BsEmojiDizzy,
+  BsEmojiNeutral,
+  BsEmojiAngry,
   BsPencil,
   BsTrash,
   BsGraphUp,
@@ -17,8 +23,6 @@ import {
 } from 'react-icons/bs';
 import type { DrawingTool, CursorType } from './types';
 import { useChartStore } from './store';
-
-const EMOJIS = ['⭐', '🔥', '🚀', '✅', '❌', '💎', '🐂', '🐻', '📈', '📉'];
 
 const cursorOptions: { type: CursorType; icon: React.ReactNode; label: string }[] = [
   { type: 'cross', icon: <BsCursor />, label: 'Cross' },
@@ -65,6 +69,16 @@ const measurementOptions: { tool: DrawingTool; icon: React.ReactNode; label: str
   { tool: 'ruler', icon: <BsGraphDown />, label: 'Regla' }
 ];
 
+const emojiOptions: Array<{ label: string; icon: React.ReactNode; value: string }> = [
+  { label: 'Smile', icon: <BsEmojiSmile />, value: '🙂' },
+  { label: 'Laugh', icon: <BsEmojiLaughing />, value: '😂' },
+  { label: 'Heart Eyes', icon: <BsEmojiHeartEyes />, value: '😍' },
+  { label: 'Sunglasses', icon: <BsEmojiSunglasses />, value: '😎' },
+  { label: 'Dizzy', icon: <BsEmojiDizzy />, value: '😵' },
+  { label: 'Neutral', icon: <BsEmojiNeutral />, value: '😐' },
+  { label: 'Angry', icon: <BsEmojiAngry />, value: '😠' }
+];
+
 const popoverStyle: React.CSSProperties = {
   position: 'absolute',
   left: '64px',
@@ -97,6 +111,17 @@ const DrawingToolbar: React.FC = () => {
 
   const [openMenu, setOpenMenu] = useState<null | 'cursor' | 'lines' | 'shapes' | 'channels' | 'pitchforks' | 'measurements'>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [isCompact, setIsCompact] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsCompact(window.innerWidth < 768);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
 const LINE_COLORS = ['#8ab4ff', '#f472b6', '#34d399', '#facc15', '#f87171', '#e2e8f0'];
 const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
 
@@ -199,16 +224,31 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
     }
   ];
 
+  const filteredButtons = isCompact
+    ? buttonConfig.filter(btn => !['pitchforks', 'measurements'].includes(btn.key))
+    : buttonConfig;
+
+  const buildPopoverStyle = (custom?: Partial<React.CSSProperties>): React.CSSProperties => ({
+    ...popoverStyle,
+    ...(isCompact
+      ? { left: '0px', top: 'calc(100% + 12px)', transform: 'none', width: 'min(360px, 92vw)' }
+      : {}),
+    ...custom
+  });
+
   return (
-    <div style={{ position: 'relative', height: '100%' }}>
+    <div style={{ position: 'relative', height: '100%', width: '100%' }}>
       <div style={{
-        height: '100%',
+        height: isCompact ? 'auto' : '100%',
+        width: '100%',
         display: 'flex',
-        flexDirection: 'column',
+        flexDirection: isCompact ? 'row' : 'column',
         alignItems: 'center',
-        gap: '12px'
+        gap: '12px',
+        overflowX: isCompact ? 'auto' : 'visible',
+        padding: isCompact ? '12px 6px' : 0
       }}>
-        {buttonConfig.map((btn) => (
+        {filteredButtons.map((btn) => (
           <div key={btn.key} style={{ position: 'relative' }}>
             <button
               onClick={btn.onClick}
@@ -233,7 +273,7 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
             </button>
 
             {btn.key === 'cursor' && openMenu === 'cursor' && (
-              <div style={{ ...popoverStyle, gridTemplateColumns: 'repeat(2, 1fr)', width: '200px' }}>
+              <div style={buildPopoverStyle({ gridTemplateColumns: 'repeat(2, 1fr)', width: isCompact ? 'min(320px, 92vw)' : '200px' })}>
                 {cursorOptions.map(option => (
                   <button
                     key={option.type}
@@ -262,7 +302,7 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
             )}
 
             {btn.key === 'lines' && openMenu === 'lines' && (
-              <div style={{ ...popoverStyle, width: '280px' }}>
+              <div style={buildPopoverStyle({ width: isCompact ? 'min(360px, 92vw)' : '280px' })}>
                 <p style={{ margin: 0, fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>Lines</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
                   {lineOptions.map(option => (
@@ -335,7 +375,7 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
             )}
 
             {btn.key === 'shapes' && openMenu === 'shapes' && (
-              <div style={{ ...popoverStyle, width: '200px' }}>
+              <div style={buildPopoverStyle({ width: isCompact ? 'min(320px, 92vw)' : '200px' })}>
                 <p style={{ margin: 0, fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>Shapes</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
                   {shapeOptions.map(option => (
@@ -366,7 +406,7 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
             )}
 
             {btn.key === 'channels' && openMenu === 'channels' && (
-              <div style={{ ...popoverStyle, width: '220px' }}>
+              <div style={buildPopoverStyle({ width: isCompact ? 'min(340px, 92vw)' : '220px' })}>
                 <p style={{ margin: 0, fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>Channels</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
                   {channelOptions.map(option => (
@@ -397,7 +437,7 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
             )}
 
             {btn.key === 'pitchforks' && openMenu === 'pitchforks' && (
-              <div style={{ ...popoverStyle, width: '200px' }}>
+              <div style={buildPopoverStyle({ width: isCompact ? 'min(320px, 92vw)' : '200px' })}>
                 <p style={{ margin: 0, fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>Pitchforks</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
                   {pitchforkOptions.map(option => (
@@ -428,7 +468,7 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
             )}
 
             {btn.key === 'measurements' && openMenu === 'measurements' && (
-              <div style={{ ...popoverStyle, gridTemplateColumns: 'repeat(2, 1fr)', width: '160px' }}>
+              <div style={buildPopoverStyle({ gridTemplateColumns: 'repeat(2, 1fr)', width: isCompact ? 'min(280px, 80vw)' : '160px' })}>
                 {measurementOptions.map(option => (
                   <button
                     key={option.tool}
@@ -458,51 +498,33 @@ const WIDTH_OPTIONS = [1, 1.5, 2.5, 3.5];
             )}
 
             {btn.key === 'emoji' && showEmojiPicker && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: '64px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  zIndex: 1100,
-                  background: '#020617',
-                  borderRadius: '14px',
-                  overflow: 'hidden',
-                  boxShadow: '0 18px 40px rgba(0,0,0,0.65)',
-                  padding: '10px',
-                  border: '1px solid #1f2937'
-                }}
-              >
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
-                    gap: '6px'
-                  }}
-                >
-                  {EMOJIS.map((emoji) => (
+              <div style={buildPopoverStyle({ width: isCompact ? 'min(320px, 92vw)' : '220px' })}>
+                <p style={{ margin: '0 0 6px', fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>Emojis</p>
+                <div style={{ display: 'grid', gridTemplateColumns: isCompact ? 'repeat(4, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
+                  {emojiOptions.map(option => (
                     <button
-                      key={emoji}
+                      key={option.label}
                       onClick={() => {
-                        setSelectedEmoji(emoji);
+                        setSelectedEmoji(option.value);
                         setActiveTool('icon');
                         setShowEmojiPicker(false);
                       }}
                       style={{
-                        width: '40px',
-                        height: '40px',
-                        background: '#111827',
+                        height: '48px',
+                        borderRadius: '12px',
                         border: '1px solid #1f2937',
-                        borderRadius: '10px',
-                        cursor: 'pointer',
+                        background: 'rgba(2,6,23,0.65)',
+                        color: '#f8fafc',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        fontSize: '18px',
-                        color: '#f8fafc'
+                        fontSize: '22px',
+                        cursor: 'pointer'
                       }}
+                      title={option.label}
+                      aria-label={option.label}
                     >
-                      <span>{emoji}</span>
+                      {option.icon}
                     </button>
                   ))}
                 </div>
